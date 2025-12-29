@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRM Live — Supabase</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto;margin:18px;direction:rtl}
+    input,button,select{padding:6px;margin:4px}
+    ul{list-style:none;padding:0}
+    li{padding:8px;border-bottom:1px solid #eee}
+  </style>
+</head>
+<body>
+  <h1>CRM — مباشر (Live) مع Supabase</h1>
+  <div id="auth">
+    <input id="email" placeholder="بريدك الإلكتروني" />
+    <button id="magic">إرسال رابط الدخول</button>
+    <button id="signout" style="display:none">تسجيل خروج</button>
+    <div id="user"></div>
+  </div>
+
+  <hr/>
+
+  <div id="app" style="display:none">
+    <h2>جهات الاتصال (عرض سريع)</h2>
+    <input id="search" placeholder="بحث باسم العميل أو رقم الهاتف" />
+    <ul id="contacts"></ul>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+
+    const SUPABASE_URL = 'https://pbddasxuabdcbdwbymih.supabase.co'
+    const SUPABASE_ANON_KEY = 'sb_publishable_77vLiH4WXqwUxf_nMI4syA_dF8CabA1'
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    const $ = id => document.getElementById(id)
+    const email = $('email'), magic = $('magic'), signout = $('signout'), userDiv = $('user')
+    const app = $('app'), contacts = $('contacts'), search = $('search')
+
+    async function init() {
+      const { data } = await supabase.auth.getSession()
+      const session = data.session
+      handleAuth(session?.user ?? null)
+      supabase.auth.onAuthStateChange((event, session) => {
+        handleAuth(session?.user ?? null)
+      })
+    }
+
+    function handleAuth(user) {
+      if (user) {
+        userDiv.textContent = `مرحبًا ${user.email} (id: ${user.id})`
+        signout.style.display = 'inline-block'
+        app.style.display = 'block'
+        loadContacts()
+        subscribeRealtime()
+      } else {
+        userDiv.textContent = 'غير مسجل'
+        signout.style.display = 'none'
+        app.style.display = 'none'
+        contacts.innerHTML = ''
+      }
+    }
+
+    magic.addEventListener('click', async () => {
+      const emailVal = email.value.trim()
+      if (!emailVal) return alert('أدخل بريدًا إلكترونيًا')
+      const { error } = await supabase.auth.signInWithOtp({ email: emailVal })
+      if (error) return alert(error.message)
+      alert('تم إرسال رابط الدخول إلى بريدك.')
+    })
+
+    signout.addEventListener('click', async () => {
+      await supabase.auth.signOut()
+    })
+
+    async function loadContacts() {
+      const q = search.value.trim()
+      let query = supabase.from('v_customer_contacts_full').select('*').order('created_at', { ascending: false })
+      if (q) {
+        query = query.or(`full_name.ilike.%${q}%,primary_phone.ilike.%${q}%`)
+      }
+      const { data, error } = await query.limit(100)
+      if (error) { console.error(error); return }
+      renderContacts(data || [])
+    }
+
+    function renderContacts(items) {
+      contacts.innerHTML = ''
+      for (const it of items) {
+        const li = document.createElement('li')
+        li.innerHTML = `<strong>${escapeHtml(it.full_name)}</strong> — ${escapeHtml(it.primary_phone || '')}
+          <div style="font-size:0.9em;color:#555">${escapeHtml(it.customer_name || '')} — ${escapeHtml(it.department || '')}</div>`
+        contacts.appendChild(li)
+      }
+    }
+
+    function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) }
+
+    let channel = null
+    function subscribeRealtime() {
+      if (channel) return
+      channel = supabase.channel('public:customer_contacts')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'customer_contacts' }, payload => {
+          console.log('realtime', payload)
+          loadContacts()
+        })
+        .subscribe()
+    }
+
+    search.addEventListener('input', () => {
+      loadContacts()
+    })
+
+    init()
+  </script>
+</body>
+</html>
